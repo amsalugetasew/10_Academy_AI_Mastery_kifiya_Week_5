@@ -4,6 +4,7 @@ import pandas as pd
 import logging
 import sqlite3
 import re
+import os
 class Preprocess:
     def __init__(self):
         self.df = {}
@@ -113,8 +114,13 @@ class Preprocess:
             df['Date'] = pd.to_datetime(df['Date'], errors='coerce')  # Convert to datetime
             df['Date'] = df['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
+        # Define the path to the database outside the project folder
+        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')  # Path to your database folder
+        os.makedirs(database_dir, exist_ok=True)  # Create directory if it doesn't exist
+        db_path = os.path.join(database_dir, 'telegram_data.db')  # Full path to the database file
+
         # Create a SQLite database
-        conn = sqlite3.connect('telegram_data.db')
+        conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
         # Create a table for storing the data
@@ -156,7 +162,11 @@ class Preprocess:
 
     def ReadSavedDate(self, db_name, table_name):
         # Connect to the SQLite database
-        conn = sqlite3.connect(db_name)  # Replace with the path to your database file
+        # Define the path to the database outside the project folder
+        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')  # Path to your database folder
+        os.makedirs(database_dir, exist_ok=True)  # Create directory if it doesn't exist
+        db_path = os.path.join(database_dir, 'telegram_data.db')  # Full path to the database file
+        conn = sqlite3.connect(db_path)  # Replace with the path to your database file
 
         # Define the SQL query
         query = f'''
