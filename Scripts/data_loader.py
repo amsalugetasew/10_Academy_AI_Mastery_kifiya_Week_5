@@ -24,7 +24,8 @@ class DataLoad:
             os.path.join(src_dir, 'meneshayeofficial.csv'),
             os.path.join(src_dir, 'AwasMart.csv'),
             os.path.join(src_dir,'helloomarketethiopia.csv'),
-            os.path.join(src_dir, 'Leyueqa.csv')
+            os.path.join(src_dir, 'Leyueqa.csv'),
+            os.path.join(src_dir, 'sinayelj.csv')
         ]
 
         # Load data
