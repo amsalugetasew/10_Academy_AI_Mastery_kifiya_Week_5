@@ -4,24 +4,48 @@ import pandas as pd
 import logging
 import sqlite3
 import re
+import unicodedata
 import os
+
 class Preprocess:
     def __init__(self):
         self.df = {}
         # Load a transformer tokenizer (e.g., bert-base-multilingual-cased or AfroXLMR)
         self.tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
-    
+
+    def normalize_amharic_text(self, text):
+        """
+        Normalize Amharic text by handling diacritics, punctuation, and special marks.
+        """
+        if not text:
+            return None
+
+        # Remove diacritics and normalize similar characters
+        text = unicodedata.normalize("NFD", text)  # Decompose Unicode
+        text = re.sub(r'[\u135D-\u135F]', '', text)  # Remove diacritics (e.g., ፝, ፞, ፟)
+        text = unicodedata.normalize("NFC", text)  # Recompose to canonical form
+
+        # Replace Ethiopian punctuation with standard punctuation
+        text = text.replace('፡', ' ').replace('።', '.').replace('፣', ',')
+
+        # Remove non-Amharic characters (optional)
+        text = re.sub(r'[^\u1200-\u137F\s.,!?]', '', text)  # Keep Amharic and basic punctuation
+
+        # Lowercase and strip leading/trailing whitespace
+        text = text.strip().lower()
+
+        return text
 
     def preprocess_text(self, text):
         """
         Preprocess Amharic text using normalization and transformer-based tokenization.
+        Includes positional tokenization.
         """
         if not text:
             return None
-        
-        # Normalize: Remove special characters and retain Amharic text
-        text = re.sub(r'[^\u1200-\u137F\s]', '', text)  # Keep Amharic characters
-        text = text.strip().lower()  # Lowercase and strip whitespace
+
+        # Normalize Amharic text
+        text = self.normalize_amharic_text(text)
 
         # Tokenize with the transformer tokenizer
         tokenized = self.tokenizer(
@@ -29,54 +53,67 @@ class Preprocess:
             padding=True,
             truncation=True,
             max_length=512,
-            return_tensors="tf"  # TensorFlow tensors
+            return_tensors="tf",  # TensorFlow tensors
         )
-        
+
+        # Generate positional encodings (position indices for each token)
+        # Positional IDs range from 0 to the length of tokens - 1
+        position_ids = tf.range(start=0, limit=tf.shape(tokenized["input_ids"])[1])
+
         # Convert tensors to numpy arrays and then to lists
-        tokenized = {key: value.numpy().tolist() if isinstance(value, tf.Tensor) else value for key, value in tokenized.items()}
-        
+        tokenized = {
+            key: value.numpy().tolist() if isinstance(value, tf.Tensor) else value
+            for key, value in tokenized.items()
+        }
+        tokenized["position_ids"] = position_ids.numpy().tolist()  # Add position IDs as a list
+
         return tokenized
 
-    # df is my dataframe with a column 'Message' containing the text
-    # Add new columns for tokenization outputs
-    def tokenize_dataframe(self, df, message_column='message'):
+    def tokenize_dataframe(self, df, message_column="Message"):
         """
         Tokenize the messages in a DataFrame and add tokenization outputs as new columns.
+        Includes positional tokenization.
         """
         input_ids = []
         attention_masks = []
         token_type_ids = []
+        position_ids = []
 
         for text in df[message_column]:
             if pd.notnull(text):  # Skip null messages
                 tokenized_output = self.preprocess_text(text)
                 if tokenized_output:
-                    input_ids.append(tokenized_output['input_ids'])  # Convert tensor to list
-                    attention_masks.append(tokenized_output['attention_mask'])
-                    token_type_ids.append(tokenized_output.get('token_type_ids', [[None]]))
+                    input_ids.append(tokenized_output["input_ids"])
+                    attention_masks.append(tokenized_output["attention_mask"])
+                    token_type_ids.append(tokenized_output.get("token_type_ids", [[None]]))
+                    position_ids.append(tokenized_output["position_ids"])
                 else:
                     input_ids.append(None)
                     attention_masks.append(None)
                     token_type_ids.append(None)
+                    position_ids.append(None)
             else:
                 input_ids.append(None)
                 attention_masks.append(None)
                 token_type_ids.append(None)
+                position_ids.append(None)
 
         # Add tokenization outputs as new columns
-        df['input_ids'] = input_ids
-        df['attention_mask'] = attention_masks
-        df['token_type_ids'] = token_type_ids
+        df["input_ids"] = input_ids
+        df["attention_mask"] = attention_masks
+        df["token_type_ids"] = token_type_ids
+        df["position_ids"] = position_ids  # Add position IDs
         return df
-    
+
     def clean_structure(self, df):
-        # Structure messages into a DataFrame
+        """
+        Restructure messages into a clean DataFrame format.
+        """
         structured_data = []
-        #`df` is a DataFrame, convert it to a list of dictionaries
+        # Convert DataFrame to a list of dictionaries
         if isinstance(df, pd.DataFrame):
             df = df.to_dict(orient='records')
-    #     'Channel Title', 'Channel Username', 'ID', 'Message', 'Date',
-    #    'Media Path', 'input_ids', 'attention_mask', 'token_type_ids'
+
         for message in df:
             structured_data.append({
                 'Channel Title': message['Channel Title'],
@@ -90,40 +127,39 @@ class Preprocess:
                 'token_type_ids': message.get('token_type_ids', [])
             })
 
-        # Convert to DataFrame
-        df = pd.DataFrame(structured_data)
-
-        # Save structured data for further analysis
-        # df.to_csv('structured_telegram_data.csv', index=False, encoding='utf-8')
-        return df
+        return pd.DataFrame(structured_data)
 
     def store_preprocessed_data(self, df):
         """
         Store preprocessed data into a SQLite database, ensuring compatibility with SQLite data types.
+        If the table already exists, it is dropped and recreated to store new data.
         """
-        # Replace NaN with None for SQLite compatibility
+        # Replace NaN with None
         df = df.where(pd.notnull(df), None)
 
-        # Convert necessary columns to strings explicitly
+        # Ensure all required columns are properly formatted
         for column in ['Media Path', 'Content', 'input_ids', 'attention_mask', 'token_type_ids']:
             if column in df.columns:
                 df[column] = df[column].astype(str)
 
-        # Convert Date to ISO-8601 string format for SQLite
+        # Format the 'Date' column
         if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')  # Convert to datetime
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
             df['Date'] = df['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
-        # Define the path to the database outside the project folder
-        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')  # Path to your database folder
-        os.makedirs(database_dir, exist_ok=True)  # Create directory if it doesn't exist
-        db_path = os.path.join(database_dir, 'telegram_data.db')  # Full path to the database file
+        # Create the database directory if it doesn't exist
+        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')
+        os.makedirs(database_dir, exist_ok=True)
+        db_path = os.path.join(database_dir, 'telegram_data.db')
 
-        # Create a SQLite database
+        # Connect to the SQLite database
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Create a table for storing the data
+        # Drop the table if it exists
+        cursor.execute('DROP TABLE IF EXISTS telegram_messages')
+
+        # Recreate the table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS telegram_messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,7 +175,7 @@ class Preprocess:
         )
         ''')
 
-        # Insert data into the database
+        # Insert the new data
         for _, row in df.iterrows():
             cursor.execute('''
             INSERT INTO telegram_messages (MESSAGE_ID, Channel_Title, Channel_Username, Date, Media_Path, Content, input_ids, attention_mask, token_type_ids)
@@ -156,27 +192,48 @@ class Preprocess:
                 row['token_type_ids']
             ))
 
-        # Commit changes and close the connection
+        # Commit the changes and close the connection
         conn.commit()
         conn.close()
 
-    def ReadSavedDate(self, db_name, table_name):
-        # Connect to the SQLite database
-        # Define the path to the database outside the project folder
-        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')  # Path to your database folder
-        os.makedirs(database_dir, exist_ok=True)  # Create directory if it doesn't exist
-        db_path = os.path.join(database_dir, 'telegram_data.db')  # Full path to the database file
-        conn = sqlite3.connect(db_path)  # Replace with the path to your database file
 
-        # Define the SQL query
+    def ReadSavedDate(self, db_name, table_name):
+        """
+        Read saved data from the SQLite database.
+        """
+        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')
+        db_path = os.path.join(database_dir, 'telegram_data.db')
+        conn = sqlite3.connect(db_path)
+
         query = f'''
         SELECT * FROM {table_name}
         '''
 
-        # Execute the query and load data into a Pandas DataFrame
         df = pd.read_sql_query(query, conn)
-
-        # Close the connection
         conn.close()
 
         return df
+
+    # ===== Data Cleaning =====
+    # Handle missing values
+    def handlling_missing_values(self, df):
+        print("\n--- Handling Missing Values ---")
+        # Drop rows with all NaN values
+        df_cleaned = df.dropna(how = 'all')
+        # Replace missing values in specific columns with placeholders
+        df_cleaned['Media_Path'] = df_cleaned['Media_Path'].fillna('No path')
+        df_cleaned['Content'] = df_cleaned['Content'].fillna("No Content")
+        df_cleaned['input_ids'] = df_cleaned['input_ids'].fillna("None")
+        df_cleaned['attention_mask'] = df_cleaned['attention_mask'].fillna("None")
+        df_cleaned['token_type_ids'] = df_cleaned['token_type_ids'].fillna("None")
+        return df_cleaned
+    # Handle duplicate data
+    def check_and_handlling_duplicate_values(self, df):
+        print("\n--- Checking Duplicates ---")
+        duplicates = df.duplicated()
+        print(f"Number of duplicate rows: {duplicates.sum()}")
+        if duplicates.sum() > 0:
+            df = df.drop_duplicates()
+        else:
+            df = df
+        return df 
