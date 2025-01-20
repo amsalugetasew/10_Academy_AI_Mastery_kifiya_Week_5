@@ -46,7 +46,7 @@ class Visualization:
     
     # Word count in 'Content' (if available)
     def word_count_in_content(self,df_cleaned):
-        df_cleaned['Content_Word_Count'] = df_cleaned['Content'].apply(lambda x: len(str(x).split()))
+        df_cleaned['Content_Word_Count'] = df_cleaned['Filtered_Content'].apply(lambda x: len(str(x).split()))
         plt.figure(figsize=(10, 5))
         sns.histplot(df_cleaned['Content_Word_Count'], bins=10, kde=True, color='purple')
         plt.title("Content Word Count Distribution")

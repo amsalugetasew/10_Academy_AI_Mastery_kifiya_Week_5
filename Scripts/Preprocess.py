@@ -124,7 +124,8 @@ class Preprocess:
                 'Content': message.get('Message', ''),
                 'input_ids': message.get('input_ids', []),
                 'attention_mask': message.get('attention_mask', []),
-                'token_type_ids': message.get('token_type_ids', [])
+                'token_type_ids': message.get('token_type_ids', []),
+                'position_ids': message.get('position_ids', []),
             })
 
         return pd.DataFrame(structured_data)
@@ -138,7 +139,7 @@ class Preprocess:
         df = df.where(pd.notnull(df), None)
 
         # Ensure all required columns are properly formatted
-        for column in ['Media Path', 'Content', 'input_ids', 'attention_mask', 'token_type_ids']:
+        for column in ['Media Path', 'Content', 'input_ids', 'attention_mask', 'token_type_ids','position_ids']:
             if column in df.columns:
                 df[column] = df[column].astype(str)
 
@@ -148,7 +149,7 @@ class Preprocess:
             df['Date'] = df['Date'].dt.strftime('%Y-%m-%dT%H:%M:%S')
 
         # Create the database directory if it doesn't exist
-        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')
+        database_dir = os.path.join(os.getcwd(), '../../10_X_data', 'database')
         os.makedirs(database_dir, exist_ok=True)
         db_path = os.path.join(database_dir, 'telegram_data.db')
 
@@ -171,15 +172,16 @@ class Preprocess:
             Content TEXT,
             input_ids TEXT,
             attention_mask TEXT,
-            token_type_ids TEXT
+            token_type_ids TEXT,
+            position_ids TEXT
         )
         ''')
 
         # Insert the new data
         for _, row in df.iterrows():
             cursor.execute('''
-            INSERT INTO telegram_messages (MESSAGE_ID, Channel_Title, Channel_Username, Date, Media_Path, Content, input_ids, attention_mask, token_type_ids)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO telegram_messages (MESSAGE_ID, Channel_Title, Channel_Username, Date, Media_Path, Content, input_ids, attention_mask, token_type_ids, position_ids)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
             ''', (
                 row['ID'],
                 row['Channel Title'],
@@ -189,7 +191,8 @@ class Preprocess:
                 row['Content'],
                 row['input_ids'],
                 row['attention_mask'],
-                row['token_type_ids']
+                row['token_type_ids'],
+                row['position_ids']
             ))
 
         # Commit the changes and close the connection
@@ -201,7 +204,7 @@ class Preprocess:
         """
         Read saved data from the SQLite database.
         """
-        database_dir = os.path.join(os.getcwd(), '10_X_data', 'database')
+        database_dir = os.path.join(os.getcwd(), '../../10_X_data', 'database')
         db_path = os.path.join(database_dir, 'telegram_data.db')
         conn = sqlite3.connect(db_path)
 
@@ -213,6 +216,15 @@ class Preprocess:
         conn.close()
 
         return df
+    
+    # Define the filter function
+    def filter_amharic_text(self, content):
+        if not content:  # Check for None or empty values
+            return None
+        # Regex to match Amharic characters and numbers
+        amharic_pattern = r'[\u1200-\u137F\u1380-\u139F\u2D80-\u2DDF\u1E00-\u1EFF0-9]+'
+        matches = re.findall(amharic_pattern, content)
+        return " ".join(matches) if matches else None
 
     # ===== Data Cleaning =====
     # Handle missing values
@@ -226,6 +238,7 @@ class Preprocess:
         df_cleaned['input_ids'] = df_cleaned['input_ids'].fillna("None")
         df_cleaned['attention_mask'] = df_cleaned['attention_mask'].fillna("None")
         df_cleaned['token_type_ids'] = df_cleaned['token_type_ids'].fillna("None")
+        df_cleaned['position_ids'] = df_cleaned['position_ids'].fillna("None")
         return df_cleaned
     # Handle duplicate data
     def check_and_handlling_duplicate_values(self, df):
