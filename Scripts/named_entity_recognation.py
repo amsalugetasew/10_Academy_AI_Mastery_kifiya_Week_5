@@ -12,7 +12,7 @@ class CoNLLLabeler:
         """
         self.dataset = dataset  # Load dataset
         self.labeled_data = labeled_data  # Labeled tokens in DataFrame format
-        self.messages = self.dataset["Content"].dropna().tolist()  # Extract non-null messages
+        self.messages = self.dataset["Filtered_Content"].dropna().tolist()  # Extract non-null messages
 
         # Convert labeled_data DataFrame to a dictionary for efficient lookup
         self.token_label_map = dict(zip(self.labeled_data["Token"], self.labeled_data["Label"]))
