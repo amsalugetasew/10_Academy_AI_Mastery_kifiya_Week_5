@@ -1,34 +1,87 @@
 import lime
-from lime.lime_text import LimeTextExplainer
+from lime import lime_text
+from transformers import AutoTokenizer, AutoModelForTokenClassification
 import numpy as np
-import torch
+import pandas as pd
+import torch.nn.functional as F
 
-class NERModelInterpretabilityWithLIME(NERModelComparison):
-    def __init__(self, model_names, tokenizer_names, dataset_path):
-        super().__init__(model_names, tokenizer_names, dataset_path)
+class NERModelExplainabilityLIME:
+    def __init__(self, model_name, tokenizer_name):
+        self.model_name = model_name
+        self.tokenizer_name = tokenizer_name
+        self.tokenizer = AutoTokenizer.from_pretrained(self.tokenizer_name)
+        self.model = AutoModelForTokenClassification.from_pretrained(self.model_name)
 
-    def explain_with_lime(self, model_name: str, tokenizer_name: str, tokenized_datasets):
-        """Use LIME to explain model predictions"""
-        # Initialize tokenizer and model
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        model = AutoModelForTokenClassification.from_pretrained(model_name)
-        
-        # LIME text explainer
-        explainer = LimeTextExplainer(class_names=[str(i) for i in range(len(self.label2id))])
-        
-        # Define a prediction function for LIME
+    def explain_with_lime(self, input_text):
+        # Define a prediction function compatible with LIME
         def predict_fn(texts):
-            inputs = tokenizer(texts, truncation=True, padding='max_length', max_length=128, return_tensors="pt")
-            outputs = model(**inputs).logits
-            return outputs.detach().numpy()
-        
-        # Example input text for explanation
-        example_text = tokenized_datasets['train']['tokens'][0]  # Take the first tokenized sentence
+            inputs = self.tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+            outputs = self.model(**inputs)
+            logits = outputs.logits  # Shape: (batch_size, seq_len, num_classes)
 
-        # Explain the prediction for the example
-        explanation = explainer.explain_instance(example_text, predict_fn, num_features=10)
-        
-        # Visualize the explanation
-        explanation.show_in_notebook(text=True)
-        return explanation
+            # Aggregate logits to create a single prediction per sample
+            logits_mean = logits.mean(dim=1)  # Shape: (batch_size, num_classes)
+            probs = F.softmax(logits_mean, dim=1)  # Convert to probabilities
+            return probs.detach().numpy()
+
+        # Create a LIME text explainer
+        explainer = lime_text.LimeTextExplainer(class_names=["O", "B-PER", "I-PER"])  # Example class names for NER
+
+        # Explain a prediction
+        explanation = explainer.explain_instance(
+            input_text,
+            predict_fn,
+            num_features=5,
+            num_samples=500
+        )
+
+        return explanation.as_list()
+
+    def identify_difficult_cases(self, dataset):
+        difficult_cases = []
+
+        for input_text in dataset:
+            # Ensure input_text is a string
+            input_text = str(input_text)
+
+            # Tokenize the input
+            inputs = self.tokenizer(input_text, truncation=True, padding=True, return_tensors="pt")
+            outputs = self.model(**inputs)
+            predicted_labels = outputs.logits.argmax(-1).squeeze().cpu().numpy()
+
+            # Simulated ground truth labels (example)
+            true_labels = [0] * len(predicted_labels)
+
+            if not np.array_equal(predicted_labels[:len(true_labels)], true_labels):
+                difficult_cases.append({
+                    "input": input_text,
+                    "true_labels": true_labels,
+                    "predicted_labels": predicted_labels[:len(true_labels)]
+                })
+
+        return difficult_cases
+
+
+    def generate_report(self, difficult_cases):
+        """
+        Generate a report for the identified difficult cases using LIME explanations.
+        """
+        report = []
+
+        for case in difficult_cases:
+            # Get LIME explanation for the input text
+            lime_explanation = self.explain_with_lime(case["input"])
+
+            report.append({
+                "input": case["input"],
+                "true_labels": case["true_labels"],
+                "predicted_labels": case["predicted_labels"],
+                "lime_explanation": lime_explanation
+            })
+
+        # Save report to a CSV file
+        pd.DataFrame(report).to_csv("lime_difficult_cases_report.csv", index=False)
+
+        return report
+
 
